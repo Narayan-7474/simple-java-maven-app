@@ -1,34 +1,48 @@
 pipeline {
     agent any
-    
-    environment {
-        JAVA_HOME = '/usr/lib/jvm/java-17-openjdk-arm64'
-        PATH = "/opt/maven/bin:$JAVA_HOME/bin:$PATH"
-        
-        // Nexus Configuration - Update with your EC2 IP
-        NEXUS_URL = "http://52.90.103.249:8081"
-        NEXUS_CREDENTIAL_ID = "nexus-credentials"
-        SONARQUBE_URL = "http://52.90.103.249:9000"
+
+    tools {
+        jdk 'jdk17'        // Must match Jenkins Global Tool Configuration
+        maven 'maven3'     // Must match Jenkins Global Tool Configuration
     }
-    
+
+    environment {
+        SONARQUBE_URL = "http://52.90.103.249:9000"
+        NEXUS_URL = "http://52.90.103.249:8081"
+    }
+
     options {
         skipStagesAfterUnstable()
     }
-    
+
     stages {
+
+        // 🔹 Checkout Code
         stage('Checkout') {
             steps {
                 git branch: 'master',
-                    url: 'https://github.com/skillupwithsachin/simple-java-maven-app.git'
+                url: 'https://github.com/skillupwithsachin/simple-java-maven-app.git'
             }
         }
-        
+
+        // 🔹 Debug Environment (VERY IMPORTANT)
+        stage('Debug') {
+            steps {
+                sh 'echo JAVA_HOME=$JAVA_HOME'
+                sh 'which java'
+                sh 'java -version'
+                sh 'mvn -v'
+            }
+        }
+
+        // 🔹 Build
         stage('Build') {
             steps {
-                sh 'mvn -B -DskipTests clean package'
+                sh 'mvn clean package -DskipTests'
             }
         }
-        
+
+        // 🔹 Test
         stage('Test') {
             steps {
                 sh 'mvn test'
@@ -40,48 +54,63 @@ pipeline {
             }
         }
 
-       stage('SonarQube Analysis') {
+        // 🔹 SonarQube Analysis
+        stage('SonarQube Analysis') {
             steps {
                 withCredentials([string(credentialsId: 'sonarqube-token', variable: 'SONAR_TOKEN')]) {
-                    sh '''
+                    sh """
                         mvn sonar:sonar \
                         -Dsonar.projectKey=simple-java-maven-app \
                         -Dsonar.projectName='Simple Java Maven App' \
                         -Dsonar.host.url=${SONARQUBE_URL} \
                         -Dsonar.token=${SONAR_TOKEN}
-                    '''
+                    """
                 }
             }
         }
-        
-   stage('Upload to Nexus') {
+
+        // 🔹 Upload to Nexus
+        stage('Upload to Nexus') {
             steps {
-                sh '''
-                    # Create Maven settings.xml with hardcoded Nexus credentials
-                    cat > settings.xml <<EOF
-<?xml version="1.0" encoding="UTF-8"?>
+                withCredentials([usernamePassword(
+                    credentialsId: 'nexus-credentials',
+                    usernameVariable: 'NEXUS_USER',
+                    passwordVariable: 'NEXUS_PASS'
+                )]) {
+                    sh """
+                        cat > settings.xml <<EOF
 <settings>
   <servers>
     <server>
       <id>nexus</id>
-      <username>admin</username>
-      <password>admin</password>
+      <username>${NEXUS_USER}</username>
+      <password>${NEXUS_PASS}</password>
     </server>
   </servers>
 </settings>
 EOF
-                    
-                    # Deploy to Nexus
-                    mvn deploy -DskipTests -s settings.xml \
-                    -DaltDeploymentRepository=nexus::http://52.90.103.249:8081/repository/maven-snapshots/
-                '''
+
+                        mvn deploy -DskipTests -s settings.xml \
+                        -DaltDeploymentRepository=nexus::default::${NEXUS_URL}/repository/maven-snapshots/
+                    """
+                }
             }
         }
-        
-        stage('Deliver') { 
+
+        // 🔹 Deliver (Optional)
+        stage('Deliver') {
             steps {
-                sh './jenkins/scripts/deliver.sh' 
+                echo "Deployment step can be added here (Tomcat/Docker/K8s)"
             }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Pipeline executed successfully!"
+        }
+        failure {
+            echo "❌ Pipeline failed. Check logs."
         }
     }
 }
